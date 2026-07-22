@@ -260,12 +260,19 @@ static int format(int file, off_t* out_offset, int* out_size)
     /* To prevent loosing 8 pages when an MBR is created, use the iamge size rather than the partition size/
      * We will mark the last page(s) as allocated in the bitmap */
     header->bitmap_size = img_size / page_size_bytes / 8;
-    /* If the page size is 256, there will be only one page for the FAT */
-    const int fat_pages_count = 1 + (page_size_bytes == 256 ? 0 : 1);
-    /* Do not count the first page and the second page */
-    header->free_pages = img_size / page_size_bytes - 1 - fat_pages_count;
-    /* All the pages are free (0), mark the first one as occupied */
-    header->pages_bitmap[0] = 3 | ((fat_pages_count > 1) ? 4 : 0);
+    /* Calculate the number of FAT pages needed dynamically:
+     * - FAT8  (256-byte pages): 1 byte per entry
+     * - FAT16 (larger pages):   2 bytes per entry
+     * The FAT always starts at page 1. */
+    const int total_pages = img_size / page_size_bytes;
+    const int fat_entry_size = (page_size_bytes == 256) ? 1 : 2;
+    const int fat_bytes_needed = total_pages * fat_entry_size;
+    /* Round up the result */
+    const int fat_pages_count = (fat_bytes_needed + page_size_bytes - 1) / page_size_bytes;
+    /* Do not count the first page and the FAT page(s) */
+    header->free_pages = total_pages - 1 - fat_pages_count;
+    /* Mark the first page(s) as occupied in the bitmap */
+    header->pages_bitmap[0] = (1 << (1 + fat_pages_count)) - 1;
     /* If an MBR is present, the last page is not available because the MBR takes some space from the partition */
     if (create_mbr) {
         /* Calculate the number of pages the MBR takes, rounded up */
