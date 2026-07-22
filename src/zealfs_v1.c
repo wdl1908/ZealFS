@@ -580,42 +580,53 @@ static int zealfs_write(const char *path, const char *buf, size_t size, off_t of
     ZealFileEntry* entry = (ZealFileEntry*) fi->fh;
     int jump_pages = offset / 255;
     int offset_in_page = offset % 255;
-    const int remaining_in_page = 255 - offset_in_page;
-
     const int total = size;
 
-    /* Check if we have enough pages. */
-    if (header->free_pages * 255 + remaining_in_page < size) {
-        return -EFBIG;
-    }
-
     uint8_t* page = CONTENT_FROM_PAGE(entry->start_page);
+
+    /* Jump to the target page, allocating new pages when seeking past EOF */
     while (jump_pages) {
-        page = CONTENT_FROM_PAGE(*page);
+        uint8_t next = *page;
+        if (next == 0) {
+            /* Allocate a new hole page */
+            next = allocatePage(header);
+            if (next == 0) {
+                return -ENOSPC;
+            }
+            *page = next;
+            memset(CONTENT_FROM_PAGE(next), 0, 256);
+        }
+        page = CONTENT_FROM_PAGE(next);
         jump_pages--;
     }
 
+    /* Write the data */
     while (size) {
         int count = MIN(255 - offset_in_page, size);
-        // printf("Writing: %d, remaining %ld\n", count, size);
         memcpy(page + 1 + offset_in_page, buf, count);
-        entry->size += (uint16_t) count;
         buf += count;
         size -= count;
 
-        /* In all cases, check the next page */
-        uint8_t next = *page;
-        if (next) {
-            page = CONTENT_FROM_PAGE(*page);
-        } else if (size) {
-            /* Only allocate a new page if we still need to write some bytes */
-            next = allocatePage((ZealFSHeader*) g_image);
-            assert( next != 0 );
-            *page = next;
+        if (size) {
+            uint8_t next = *page;
+            if (next == 0) {
+                next = allocatePage(header);
+                if (next == 0) {
+                    return -ENOSPC;
+                }
+                *page = next;
+                memset(CONTENT_FROM_PAGE(next), 0, 256);
+            }
             page = CONTENT_FROM_PAGE(next);
         }
 
         offset_in_page = 0;
+    }
+
+    /* Update file size if necessary */
+    const off_t new_size = offset + total;
+    if (new_size > entry->size) {
+        entry->size = (uint16_t) new_size;
     }
 
     return total;

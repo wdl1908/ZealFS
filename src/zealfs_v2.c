@@ -770,61 +770,54 @@ static int zealfs_write(const char *path, const char *buf, size_t size, off_t of
 {
     ZealFSHeader* header = (ZealFSHeader*) g_image;
     ZealFileEntry* entry = (ZealFileEntry*) fi->fh;
-    /* Subtract 2 for the pointer to the next page */
     const int data_bytes_per_page = getPageSize(header);
     int jump_pages = offset / data_bytes_per_page;
     int offset_in_page = offset % data_bytes_per_page;
-    const int remaining_in_page = data_bytes_per_page - offset_in_page;
-
     const int total = size;
-
-    /* Check if we have enough pages. */
-    if (header->free_pages * data_bytes_per_page + remaining_in_page < size) {
-        return -EFBIG;
-    }
 
     uint16_t current_page = entry->start_page;
 
+    /* Jump to the target page, allocating new pages when seeking past EOF */
     while (jump_pages) {
         int next_page = getNextFromFat(g_image, current_page);
         if (next_page == 0) {
-            /* There is no more pages to browse but we need to write new data, so allocate a new page.
-             * This state must only occur when we are browsing the last page! Else, the disk is corrupted */
-            if (jump_pages != 1) {
-                printf("[ZEALFS] Could not seek file in the disk, possible corruption!\n");
-                return -ESPIPE;
-            }
             next_page = allocateNext(header, current_page);
-            /* Make sure the new page is valid! */
             if (next_page <= 0) {
-                return next_page;
+                return (next_page == 0) ? -ENOSPC : next_page;
             }
+            /* Zero-fill the hole page */
+            memset(content_from_page(header, next_page), 0, data_bytes_per_page);
         }
         current_page = next_page;
         jump_pages--;
     }
 
+    /* Write the data */
     while (size) {
         uint8_t* page = content_from_page(header, current_page);
         int count = MIN(data_bytes_per_page - offset_in_page, size);
         memcpy(page + offset_in_page, buf, count);
-        entry->size += count;
         buf += count;
         size -= count;
 
-        /* In all cases, check the next page */
-        uint16_t next = getNextFromFat(g_image, current_page);
-        if (next) {
-            current_page = next;
-        } else if (size) {
-            next = allocateNext(header, current_page);
-            if (next < 0) {
-                return next;
+        if (size) {
+            uint16_t next = getNextFromFat(g_image, current_page);
+            if (next == 0) {
+                next = allocateNext(header, current_page);
+                if (next <= 0) {
+                    return (next == 0) ? -ENOSPC : next;
+                }
+                memset(content_from_page(header, next), 0, data_bytes_per_page);
             }
             current_page = next;
         }
-
         offset_in_page = 0;
+    }
+
+    /* Update file size if necessary */
+    off_t new_size = offset + total;
+    if (new_size > entry->size) {
+        entry->size = new_size;
     }
 
     return total;
