@@ -117,6 +117,25 @@ When creating a new disk image using ZealFS v2, you can also include a Master Bo
 
 Once started, the binary runs in the background. You can populate or inspect the mounted disk image using either a terminal or a graphical file explorer, just like with any regular file system.
 
+#### Partitions
+
+When an image contains multiple ZealFS partitions (i.e. several MBR entries with type `0x5A`), use `--partition=N` to select which one to mount. The index is 0-based. To list all ZealFS partitions and their indices, use `--list-partitions`, it only shows ZealFS partitions without mounting the image:
+
+```
+$ ./zealfs --image=multi.img --list-partitions -v2
+
+ZealFS partitions in: multi.img
+  Index  Entry  LBA (sectors)  Size (sectors)  Size
+  -----  -----  ------------  --------------  ----------
+      0      0           64           16384    8388608 bytes
+      1      2        32832           16384    8388608 bytes
+  -----  -----  ------------  --------------  ----------
+  Use --partition=N (0-based) to select a ZealFS partition.
+  Non-ZealFS partitions are not shown.
+
+$ ./zealfs --image=multi.img -v2 --partition=1 /mnt
+```
+
 To display all available options, use:
 
 ```

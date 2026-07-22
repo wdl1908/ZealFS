@@ -13,6 +13,8 @@ typedef struct {
     int v1;
     int v2;
     int mbr;
+    int partition;
+    int list_partitions;
     int img_fd;
     off_t offset;
 } zealfs_context;

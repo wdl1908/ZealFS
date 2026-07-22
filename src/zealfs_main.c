@@ -14,6 +14,7 @@
 #include <fuse3/fuse_opt.h>
 #include <fuse3/fuse.h>
 #include "common.h"
+#include "mbr.h"
 
 
 /* The default name for the disk image can be provided from the Makefile or command
@@ -40,6 +41,8 @@ static const struct fuse_opt option_spec[] = {
     OPTION("--image=%s", img_file),
     OPTION("--size=%d", size),
     OPTION("--mbr", mbr),
+    OPTION("--partition=%d", partition),
+    OPTION("--list-partitions", list_partitions),
     OPTION("-v1", v1),
     OPTION("-v2", v2),
     OPTION("-h", show_help),
@@ -57,6 +60,8 @@ static void show_help(const char *program)
             "    --image=<s>          Name of the image file, \"" DEFAULT_IMAGE_NAME "\" by default\n"
             "    --size=<s>           Size of the new image file in KB if not existing\n"
             "    --mbr                Create an MBR in the new image file if not existing (ZealFSv2 only)\n"
+            "    --partition=N        Select the Nth ZealFS partition (0-based index, default: 0)\n"
+            "    --list-partitions    List all ZealFS partitions in the MBR and exit\n"
             "    -v1                  Use ZealFSv1 (64KB limit) for the given image\n"
             "    -v2                  Use ZealFSv2 (4GB limit) for the given image\n"
             "\n");
@@ -89,6 +94,7 @@ int main(int argc, char *argv[])
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
     options.size = DEFAULT_IMAGE_SIZE_KB;
+    options.partition = 0;
 
     /* Parse options */
     if (fuse_opt_parse(&args, &options, option_spec, NULL) == -1)
@@ -105,6 +111,17 @@ int main(int argc, char *argv[])
         fuse_lib_help(&args);
         args.argv[0][0] = '\0';
         return 1;
+    }
+
+    /* If --list-partitions was requested, print partition table and exit */
+    if (options.list_partitions) {
+        struct stat lst = { 0 };
+        if (stat(options.img_file, &lst) != 0) {
+            printf("ERROR: Could not stat image file %s\n", options.img_file);
+            return 1;
+        }
+        mbr_list_partitions(options.img_file, lst.st_size);
+        return 0;
     }
 
     printf("Info: using disk image %s\n", options.img_file);

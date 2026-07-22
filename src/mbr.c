@@ -22,10 +22,7 @@
 #define SECTOR_SIZE             512
 
 #define PARTITION_STATUS_OFFSET 0
-#define PARTITION_TYPE_OFFSET   4
-#define LBA_OFFSET              8
-#define SECTOR_COUNT_OFFSET     12
-
+#define MAX_PRIMARY_PARTITIONS 4
 
 int mbr_create(uint8_t* out_mbr, off_t part_offset, size_t part_size)
 {
@@ -66,7 +63,77 @@ int mbr_create(uint8_t* out_mbr, off_t part_offset, size_t part_size)
 }
 
 
-int mbr_find_partition(const char* filename, int filesize, off_t* offset, int* size)
+void mbr_list_partitions(const char* filename, int filesize)
+{
+    struct { 
+        int entry;
+        uint32_t lba;
+        uint32_t count;
+    } zparts[MAX_PRIMARY_PARTITIONS];
+    uint8_t mbr[MBR_SIZE];
+
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
+        perror("Could not open file");
+        return;
+    }
+
+    ssize_t bytes_read = read(fd, mbr, MBR_SIZE);
+    if (bytes_read != MBR_SIZE) {
+        perror("Failed to read MBR");
+        close(fd);
+        return;
+    }
+
+    /* Check for MBR signature */
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        /* No MBR -- check if it's a raw ZealFS image */
+        if (mbr[0] == TARGET_TYPE) {
+            printf("Raw ZealFS image (no MBR), single partition at index 0, size %d bytes\n",
+                   filesize);
+        } else {
+            printf("No valid MBR signature found\n");
+        }
+        close(fd);
+        return;
+    }
+
+    /* Collect all ZealFS partitions into a small array (at most 4 entries) */
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        uint8_t *e = mbr + PARTITION_TABLE_OFFSET + i * PARTITION_ENTRY_SIZE;
+        if (e[PARTITION_TYPE_OFFSET] == TARGET_TYPE) {
+            zparts[n].entry = i;
+            zparts[n].lba   = *(const uint32_t *)(e + LBA_OFFSET);
+            zparts[n].count = *(const uint32_t *)(e + SECTOR_COUNT_OFFSET);
+            n++;
+        }
+    }
+
+    if (n == 0) {
+        printf("MBR present but no ZealFS partition found.\n");
+        close(fd);
+        return;
+    }
+
+    printf("\nZealFS partitions in: %s\n", filename);
+    printf("  Index  Entry  LBA (sectors)  Size (sectors)  Size\n");
+    printf("  -----  -----  ------------  --------------  ----------\n");
+    for (int i = 0; i < n; i++) {
+        printf("     %d     %d  %11u  %14u  %s  %u bytes\n",
+            i, zparts[i].entry, zparts[i].lba, zparts[i].count,
+            zparts[i].count >= 2048 ? "  " : "     ",
+            zparts[i].count * SECTOR_SIZE);
+    }
+    printf("\n");
+    printf("Use --partition=N (0-based) to select a ZealFS partition.\n");
+    printf("Non-ZealFS partitions are not shown.\n\n");
+
+    close(fd);
+}
+
+
+int mbr_find_partition(const char* filename, int filesize, off_t* offset, int* size, int partition_index)
 {
     uint8_t mbr[MBR_SIZE];
 
@@ -85,31 +152,51 @@ int mbr_find_partition(const char* filename, int filesize, off_t* offset, int* s
 
     /* Check for MBR signature (0x55AA at offset 510) */
     if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
-        /* "Invalid MBR signature, check if it's a raw ZealFS image */
+        /* Invalid MBR signature, check if it's a raw ZealFS image */
         close(fd);
         if (mbr[0] == TARGET_TYPE) {
-            *offset = 0;
-            *size = filesize;
-            return 1;
+            if (partition_index == 0) {
+                *offset = 0;
+                *size = filesize;
+                return 1;
+            }
+            printf("ERROR: Partition index %d requested but only 1 ZealFS partition exists "
+                   "(raw image, no MBR)\n", partition_index);
         }
         return 0;
     }
 
-    /* Iterate through the 4 partition entries */
-    for (int i = 0; i < 4; i++) {
+    int zealfs_count = 0;
+
+    /* Iterate through the primary partition entries */
+    for (int i = 0; i < MAX_PRIMARY_PARTITIONS; i++) {
         uint8_t *entry = mbr + PARTITION_TABLE_OFFSET + i * PARTITION_ENTRY_SIZE;
         uint8_t type = entry[PARTITION_TYPE_OFFSET];
 
+        if (type == 0) {
+            continue;  /* Unused entry */
+        }
+
         if (type == TARGET_TYPE) {
-            const uint32_t lba = *(uint32_t *)(entry + LBA_OFFSET);
-            const uint32_t sector_count = *(uint32_t *)(entry + SECTOR_COUNT_OFFSET);
-            *offset = (off_t)lba * SECTOR_SIZE;
-            *size = sector_count * SECTOR_SIZE;
-            close(fd);
-            return 1;
+            if (zealfs_count == partition_index) {
+                const uint32_t lba = *(uint32_t *)(entry + LBA_OFFSET);
+                const uint32_t sector_count = *(uint32_t *)(entry + SECTOR_COUNT_OFFSET);
+                *offset = (off_t)lba * SECTOR_SIZE;
+                *size = sector_count * SECTOR_SIZE;
+                close(fd);
+                return 1;
+            }
+            zealfs_count++;
         }
     }
+
     close(fd);
+
+    if (zealfs_count > 0) {
+        printf("ERROR: Partition index %d requested but only %d ZealFS partition(s) found "
+               "(0-based index)\n", partition_index, zealfs_count);
+    }
+
     return 0;
 }
 

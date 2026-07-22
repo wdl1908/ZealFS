@@ -935,9 +935,9 @@ static int zealfs_image_init(zealfs_context* ctx)
     if (stat(ctx->img_file, &st) != 0) {
         /* File doesn't exist, we need to truncate the new file */
         trunc = 1;
-    } else if (mbr_find_partition(ctx->img_file, st.st_size, &ctx->offset, &ctx->size)) {
-        printf("Found ZealFS partition at offset 0x%lx (LBA: 0x%lx), size %d bytes\n",
-            ctx->offset, ctx->offset / 512, ctx->size);
+    } else if (mbr_find_partition(ctx->img_file, st.st_size, &ctx->offset, &ctx->size, ctx->partition)) {
+        printf("Found ZealFS partition #%d at offset 0x%lx (LBA: 0x%lx), size %d bytes\n",
+            ctx->partition, ctx->offset, ctx->offset / 512, ctx->size);
     } else {
         printf("Could not find any ZealFS partition in the existing image\n");
         return 1;

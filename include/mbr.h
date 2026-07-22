@@ -10,4 +10,6 @@
 
 int mbr_create(uint8_t* out_mbr, off_t part_offset, size_t part_size);
 
-int mbr_find_partition(const char* filename, int filesize, off_t* offset, int* size);
+int mbr_find_partition(const char* filename, int filesize, off_t* offset, int* size, int partition_index);
+
+void mbr_list_partitions(const char* filename, int filesize);
